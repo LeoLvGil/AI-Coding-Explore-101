@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>弹弓小鸟游戏 - 集成数据库</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* === CSS: 全局及页面基础样式 === */
+        body {
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f0f8ff;
+            overflow: hidden;
+        }
+        /* === CSS: 游戏画布样式 === */
+        #gameCanvas {
+            background-color: #cce7ff;
+            border: 2px solid #333;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            display: block;
+        }
+        /* === CSS: 控制按钮区域样式 === */
+        .controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+        }
+        /* === CSS: 通用按钮样式 === */
+        .button {
+            padding: 10px 20px;
+            font-size: 16px;
+            color: white;
+            background-color: #4CAF50;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        .button:hover {
+            background-color: #45a049;
+        }
+        /* === CSS: 次要/警示按钮样式 === */
+        .button-secondary {
+            background-color: #f44336;
+        }
+        .button-secondary:hover {
+            background-color: #da190b;
+        }
+        /* === CSS: 计分板样式 === */
+        .score-board {
+            margin-top: 15px;
+            font-size: 18px; 
+            font-weight: bold;
+            color: #333;
+            text-align: center;
+        }
+        /* === CSS: 弹弓SVG图像样式 === */
+        .slingshot-svg {
+            position: absolute; 
+            pointer-events: none; 
+            z-index: 1; 
+        }
+        /* === CSS: 消息提示框样式 === */
+         #messageBox {
+            border: 2px solid #4CAF50;
+        }
+        /* === CSS: 用户ID显示区域样式 === */
+        .user-id-display {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+<body class="bg-sky-100">
+    <!-- === HTML: 页面标题和说明 === -->
+    <div class="text-center p-4">
+        <h1 class="text-3xl font-bold text-sky-700 mb-2">弹弓小鸟</h1>
+        <p class="text-gray-600">拖动小鸟瞄准，松开鼠标发射！摧毁所有目标过关。</p>
+    </div>
+
+    <!-- === HTML: 游戏画布 === -->
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- === HTML: 控制按钮区域 === -->
+    <div class="controls">
+        <button id="resetButton" class="button">重置小鸟</button>
+        <button id="resetGameButton" class="button button-secondary">重置游戏</button>
+    </div>
+    <!-- === HTML: 计分板 === -->
+    <div id="scoreBoard" class="score-board">得分: 0</div>
+    <!-- === HTML: 用户ID显示区域 === -->
+    <div id="userIdDisplay" class="user-id-display">用户ID: 正在加载...</div>
+
+    <!-- === HTML: 消息提示框与遮罩层 === -->
+    <div id="messageBox" class="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white p-6 rounded-lg shadow-xl text-center hidden z-50">
+        <p id="messageText" class="text-xl mb-4"></p>
+        <button id="closeMessageButton" class="button">好的</button>
+    </div>
+    <div id="overlay" class="fixed inset-0 bg-black opacity-50 hidden z-40"></div>
+    
+    <!-- === HTML: 弹弓SVG图像容器 === -->
+    <div id="slingshotContainer"></div>
+
+    <script type="module">
+        // === JS: Firebase SDK 模块导入 ===
+        // 用于初始化Firebase应用、用户认证、数据库操作等
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // === JS: HTML元素获取 ===
+        // 获取页面中各个重要元素的引用，以便后续操作
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d'); // Canvas 2D渲染上下文
+        const resetButton = document.getElementById('resetButton'); // 重置小鸟按钮
+        const resetGameButton = document.getElementById('resetGameButton'); // 重置游戏按钮
+        const scoreBoard = document.getElementById('scoreBoard'); // 计分板
+        const messageBox = document.getElementById('messageBox'); // 消息提示框
+        const messageText = document.getElementById('messageText'); // 消息文本
+        const closeMessageButton = document.getElementById('closeMessageButton'); // 关闭消息按钮
+        const overlay = document.getElementById('overlay'); // 遮罩层
+        const slingshotContainer = document.getElementById('slingshotContainer'); // 弹弓SVG容器
+        const userIdDisplay = document.getElementById('userIdDisplay'); // 用户ID显示
+
+        // === JS: Firebase 项目配置 ===
+        // ============================================================================================
+        // ===> TODO: REPLACE THIS WITH YOUR FIREBASE PROJECT CONFIG <===
+        // ===> 待办：请将这里替换成你自己的 Firebase 项目配置 <===
+        // You can find this in your Firebase project settings -> General -> Your apps -> SDK setup and configuration
+        // 你可以在 Firebase 项目设置 -> 常规 -> 你的应用 -> SDK 设置和配置 中找到这些信息
+        // const firebaseConfig = {
+        //     apiKey: "YOUR_API_KEY",
+        //     authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+        //     projectId: "YOUR_PROJECT_ID",
+        //     storageBucket: "YOUR_PROJECT_ID.appspot.com",
+        //     messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+        //     appId: "YOUR_APP_ID"
+        // };
+        const firebaseConfig = { // 实际使用的Firebase配置
+        apiKey: "AIzaSyDBd6amfLfl75axbZ_j7MEd03Q_mmsATjw",
+        authDomain: "nuniao-d1edc.firebaseapp.com",
+        projectId: "nuniao-d1edc",
+        storageBucket: "nuniao-d1edc.firebasestorage.app",
+        messagingSenderId: "88858567354",
+        appId: "1:88858567354:web:0a5b12b9f0a0b9b87c5883",
+        measurementId: "G-5GVVQ405ZB"
+        };
+        // ============================================================================================
+
+        // === JS: Firebase 相关变量 ===
+        let db, auth, userId; // 数据库实例、认证实例、用户ID
+        const appId = firebaseConfig.projectId || 'default-app-id'; // 应用ID，用于数据库路径
+
+        // === JS: Firebase 初始化与匿名登录 ===
+        async function initFirebase() {
+            if (!firebaseConfig || !firebaseConfig.projectId) {
+                console.error("Firebase config is missing or incomplete. Please replace the placeholder object.");
+                userIdDisplay.textContent = "用户ID: 数据库配置缺失";
+                return;
+            }
+            try {
+                const app = initializeApp(firebaseConfig); // 初始化Firebase应用
+                db = getFirestore(app); // 获取Firestore数据库服务实例
+                auth = getAuth(app); // 获取Firebase认证服务实例
+                setLogLevel('debug'); // 设置Firebase日志级别为debug，方便调试
+
+                // 监听认证状态变化
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) { // 用户已登录
+                        userId = user.uid;
+                        console.log("User is signed in with UID:", userId);
+                        userIdDisplay.textContent = `用户ID: ${userId}`;
+                    } else { // 用户未登录，尝试匿名登录
+                        userIdDisplay.textContent = "用户ID: 正在验证...";
+                        console.log("User is signed out. Attempting to sign in anonymously...");
+                        try {
+                            await signInAnonymously(auth);
+                            console.log("Signed in anonymously.");
+                            // onAuthStateChanged会再次触发，届时userId将被设置
+                        } catch (error) {
+                            console.error("Error during anonymous sign-in:", error);
+                            userIdDisplay.textContent = "用户ID: 验证失败";
+                            showMessage("错误：无法匿名登录以保存记录。");
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+                userIdDisplay.textContent = "用户ID: 初始化数据库失败";
+            }
+        }
+        
+        // === JS: 保存游戏记录到Firestore数据库 ===
+        async function saveGameRecord(recordData) {
+            if (!db || !userId) {
+                console.error("Firestore not initialized or user not authenticated for saving record.");
+                return false; // Firestore未初始化或用户未认证，则不保存
+            }
+            try {
+                // 构建数据库集合引用路径，区分不同应用和用户
+                const recordsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/slingshotGameRecords`);
+                await addDoc(recordsCollectionRef, { // 添加新文档到集合
+                    ...recordData, // 游戏记录数据
+                    timestamp: serverTimestamp() // 使用服务器时间戳
+                });
+                console.log("Game record saved:", recordData);
+                return true;
+            } catch (error) {
+                console.error("Error saving game record:", error);
+                return false;
+            }
+        }
+
+        // === JS: 游戏核心常量与变量定义 ===
+        // 这些变量控制游戏的视觉元素大小、物理效果和游戏状态
+        let canvasWidth, canvasHeight; // 画布宽高
+        let BIRD_RADIUS, SLINGSHOT_X, SLINGSHOT_Y, SLINGSHOT_GROUND_OFFSET, MAX_DRAG_DISTANCE, TARGET_WIDTH_BASE, TARGET_HEIGHT_BASE; // 游戏元素尺寸与位置相关常量
+        const GRAVITY = 0.3; // 重力加速度
+        const TOTAL_LEVELS = 3; // 总关卡数
+        const DRAG_BUFFER = 5; // 拖拽时的缓冲区域或额外判定距离
+
+        let slingshotVisualHeight, slingshotVisualWidth; // 弹弓SVG视觉上的宽高
+        let leftProngTip = { x: 0, y: 0 }; // 弹弓左边叉尖端坐标
+        let rightProngTip = { x: 0, y: 0 }; // 弹弓右边叉尖端坐标
+
+        // === JS: 游戏对象与状态变量 ===
+        let bird; // 小鸟对象
+        let targets = []; // 目标对象数组
+        let isDragging = false; // 是否正在拖拽小鸟
+        let score = 0; // 当前得分
+        let launchCount = 0; // 当前关卡发射次数
+        let totalSessionLaunches = 0; // 整个游戏会话的总发射次数
+        let currentLevel = 1; // 当前关卡
+        let gameWon = false; // 游戏是否胜利（所有关卡完成）
+        let levelClearMessageShown = false; // 当前关卡通过的消息是否已显示
+
+        // === JS: 动态更新游戏常量和画布尺寸 ===
+        // 根据窗口大小调整游戏元素的尺寸和位置，实现响应式布局
+        function updateGameConstants() {
+            canvasWidth = Math.min(window.innerWidth * 0.9, 800); // 画布宽度，最大800px
+            canvasHeight = canvasWidth * 0.6; // 画布高度，根据宽度按比例调整
+            
+            canvas.width = canvasWidth;
+            canvas.height = canvasHeight;
+
+            // 根据画布尺寸计算各项游戏元素的实际大小和位置
+            BIRD_RADIUS = canvasWidth * 0.025;
+            SLINGSHOT_X = canvasWidth * 0.15; 
+            MAX_DRAG_DISTANCE = canvasWidth * 0.12;
+            SLINGSHOT_GROUND_OFFSET = canvasHeight * 0.1; 
+            const groundLineY = canvasHeight - SLINGSHOT_GROUND_OFFSET; // 地面线Y坐标
+
+            // 精确计算弹弓Y坐标，确保与小鸟、拖拽距离协调
+            SLINGSHOT_Y = groundLineY - DRAG_BUFFER - BIRD_RADIUS - MAX_DRAG_DISTANCE;
+
+            // 计算弹弓SVG的视觉高度和宽度
+            slingshotVisualHeight = (groundLineY - SLINGSHOT_Y) / 0.6; // 0.6是SVG设计上的比例因子
+            if (slingshotVisualHeight < BIRD_RADIUS * 2.5) { // 最小高度限制
+                slingshotVisualHeight = BIRD_RADIUS * 2.5; 
+                SLINGSHOT_Y = groundLineY - (slingshotVisualHeight * 0.6); // 反向调整SLINGSHOT_Y以适应最小高度
+            }
+            slingshotVisualWidth = slingshotVisualHeight * (60 / 100); // SVG宽高比 60:100
+
+            // 计算弹弓SVG在页面上的绝对定位
+            const svgTop = groundLineY - slingshotVisualHeight;
+            const svgLeft = SLINGSHOT_X - slingshotVisualWidth / 2; 
+
+            // 更新弹弓SVG元素的样式
+            const slingshotSvgElement = slingshotContainer.querySelector('.slingshot-svg');
+            if (slingshotSvgElement) {
+                slingshotSvgElement.style.width = `${slingshotVisualWidth}px`;
+                slingshotSvgElement.style.height = `${slingshotVisualHeight}px`;
+                slingshotSvgElement.style.left = `${svgLeft}px`;
+                slingshotSvgElement.style.top = `${svgTop}px`;
+            }
+
+            // 计算弹弓叉的尖端在屏幕上的精确坐标，用于绘制皮筋
+            const prongRelativeX1 = 10 / 60; // 叉尖在SVG viewBox中的相对X坐标 (左)
+            const prongRelativeX2 = 50 / 60; // (右)
+            const prongRelativeY = 10 / 100; // 叉尖在SVG viewBox中的相对Y坐标
+
+            leftProngTip.x = svgLeft + slingshotVisualWidth * prongRelativeX1;
+            leftProngTip.y = svgTop + slingshotVisualHeight * prongRelativeY;
+            rightProngTip.x = svgLeft + slingshotVisualWidth * prongRelativeX2;
+            rightProngTip.y = svgTop + slingshotVisualHeight * prongRelativeY;
+
+            // 目标物体的基础尺寸
+            TARGET_WIDTH_BASE = canvasWidth * 0.06;
+            TARGET_HEIGHT_BASE = canvasHeight * 0.12;
+        }
+        
+        // === JS: 创建并放置弹弓的SVG图像 ===
+        function createAndPlaceSlingshotSVG() {
+            slingshotContainer.innerHTML = `
+                <svg viewBox="0 0 60 100" class="slingshot-svg">
+                    <path d="M30 100 L30 40 M30 40 Q10 30 10 10 M30 40 Q50 30 50 10" stroke="#8B4513" stroke-width="8" fill="none" stroke-linecap="round"/>
+                </svg>
+            `;
+        }
+
+        // === JS: 创建小鸟对象 ===
+        // 返回一个包含小鸟属性（位置、半径、颜色、速度等）的对象
+        function createBird() {
+            return {
+                x: SLINGSHOT_X, // 初始X位置 (弹弓处)
+                y: SLINGSHOT_Y, // 初始Y位置 (弹弓处)
+                radius: BIRD_RADIUS,
+                color: '#FF4136', // 小鸟颜色
+                velocityX: 0,
+                velocityY: 0,
+                isFlying: false, // 是否正在飞行
+                onSlingshot: true, // 是否在弹弓上准备发射
+            };
+        }
+
+        // === JS: 创建目标对象 ===
+        // 返回一个包含目标属性（位置、宽高、颜色、是否被击中）的对象
+        function createTarget(x, y, width, height, color = '#8B4513') {
+            return { x, y, width, height, color, isHit: false };
+        }
+        
+        // === JS: 获取随机建筑物颜色 ===
+        function getRandomBuildingColor() {
+            const colors = ['#8B4513', '#A0522D', '#D2691E', '#778899', '#A9A9A9', '#696969']; 
+            return colors[Math.floor(Math.random() * colors.length)];
+        }
+
+        // === JS: 初始化关卡目标 ===
+        // 根据当前关卡级别，生成不同布局和数量的目标
+        function initTargets(level) {
+            targets = []; // 清空之前的目标
+            const groundLevelY = canvasHeight - SLINGSHOT_GROUND_OFFSET; // 地面Y坐标
+
+            if (level === 1) { // 关卡1：固定目标布局
+                const startX = canvasWidth * 0.65;
+                targets.push(createTarget(startX, groundLevelY - TARGET_HEIGHT_BASE, TARGET_WIDTH_BASE, TARGET_HEIGHT_BASE));
+                targets.push(createTarget(startX + TARGET_WIDTH_BASE * 1.2, groundLevelY - TARGET_HEIGHT_BASE, TARGET_WIDTH_BASE, TARGET_HEIGHT_BASE));
+                targets.push(createTarget(startX + TARGET_WIDTH_BASE * 0.6, groundLevelY - TARGET_HEIGHT_BASE * 2.1, TARGET_WIDTH_BASE, TARGET_HEIGHT_BASE * 1.5, '#A0522D'));
+                targets.push(createTarget(startX + TARGET_WIDTH_BASE * 2.4, groundLevelY - TARGET_HEIGHT_BASE, TARGET_WIDTH_BASE, TARGET_HEIGHT_BASE));
+                targets.push(createTarget(startX, groundLevelY - TARGET_HEIGHT_BASE * 2.7, TARGET_WIDTH_BASE * 2.2, TARGET_HEIGHT_BASE * 0.5, '#D2691E'));
+            } else if (level === 2 || level === 3) { // 关卡2和3：随机目标布局
+                const numTargets = 5 + Math.floor(Math.random() * (level * 2)); // 目标数量随关卡增加
+                const buildingAreaStartX = canvasWidth * 0.5; // 目标生成区域的起始X
+                const buildingAreaEndX = canvasWidth * 0.95;  // 目标生成区域的结束X
+                const buildingAreaWidth = buildingAreaEndX - buildingAreaStartX;
+
+                for (let i = 0; i < numTargets; i++) {
+                    let width = TARGET_WIDTH_BASE * (0.7 + Math.random() * 0.8); // 随机宽度
+                    let height = TARGET_HEIGHT_BASE * (0.7 + Math.random() * (0.8 + level * 0.2) ); // 随机高度，随关卡可能更高
+                    let x = buildingAreaStartX + Math.random() * (buildingAreaWidth - width); // 随机X位置
+                    let y;
+                    // 尝试堆叠目标
+                    if (targets.length > 0 && Math.random() < 0.4 && level > 1) { 
+                        const prevTarget = targets[targets.length-1];
+                        // 如果新目标在X轴上与前一个目标有重叠，则尝试放在前一个目标上方
+                        if (x < prevTarget.x + prevTarget.width && x + width > prevTarget.x) { 
+                             y = prevTarget.y - height - (Math.random() * 5); // 放在上方，留一点间隙
+                        } else {
+                             y = groundLevelY - height - (Math.random() * TARGET_HEIGHT_BASE * 0.5 * level); // 随机Y位置，离地面有一定距离
+                        }
+                    } else {
+                         y = groundLevelY - height - (Math.random() * TARGET_HEIGHT_BASE * 0.5 * level);
+                    }
+                    y = Math.max(0, y); // 确保目标不低于画布顶部
+
+                    // 防止目标过度重叠的尝试
+                    let maxAttempts = 5;
+                    while(maxAttempts > 0) {
+                        let overlaps = false;
+                        for (const t of targets) {
+                            if (x < t.x + t.width && x + width > t.x && y < t.y + t.height && y + height > t.y) {
+                                overlaps = true;
+                                break;
+                            }
+                        }
+                        if (!overlaps) break; // 没有重叠，位置可以
+                        x += (Math.random() - 0.5) * width * 0.5; // 轻微调整X位置
+                        x = Math.max(buildingAreaStartX, Math.min(buildingAreaEndX - width, x)); // 确保仍在生成区域内
+                        maxAttempts--;
+                    }
+                    targets.push(createTarget(x, y, width, height, getRandomBuildingColor()));
+                }
+                // 如果随机生成后没有目标，则至少添加一个默认目标
+                if (targets.length === 0) { 
+                    targets.push(createTarget(canvasWidth * 0.7, groundLevelY - TARGET_HEIGHT_BASE, TARGET_WIDTH_BASE, TARGET_HEIGHT_BASE));
+                }
+            }
+            levelClearMessageShown = false; // 重置关卡清除消息显示状态
+        }
+        
+        // === JS: UI - 显示消息提示框 ===
+        function showMessage(msg) {
+            messageText.textContent = msg;
+            messageBox.classList.remove('hidden');
+            overlay.classList.remove('hidden');
+        }
+
+        // === JS: UI - 关闭消息提示框事件监听 ===
+        closeMessageButton.addEventListener('click', () => {
+            messageBox.classList.add('hidden');
+            overlay.classList.add('hidden');
+        });
+
+        // === JS: 绘制 - 绘制小鸟 ===
+        function drawBird() {
+            if (!bird) return;
+            ctx.save(); // 保存当前绘图状态
+            ctx.translate(bird.x, bird.y); // 将坐标原点移动到小鸟中心
+            
+            // 如果小鸟在飞且有水平速度，则根据飞行方向旋转小鸟图形
+            if (bird.isFlying && bird.velocityX !== 0) { 
+                let angle = Math.atan2(bird.velocityY, bird.velocityX); // 计算飞行角度
+                if (bird.velocityX < 0) { // 向左飞
+                    ctx.rotate(angle + Math.PI); // 旋转180度 + 角度
+                    ctx.scale(-1, 1); // 水平翻转图像
+                } else { // 向右飞
+                    ctx.rotate(angle); // 按飞行角度旋转
+                }
+            }
+            
+            // 绘制鸟身 (圆形)
+            ctx.beginPath();
+            ctx.arc(0, 0, bird.radius, 0, Math.PI * 2);
+            ctx.fillStyle = bird.color;
+            ctx.fill();
+            ctx.closePath();
+            
+            // 绘制眼睛
+            const eyeRadius = bird.radius * 0.2;
+            const eyeXOffset = bird.radius * 0.3; 
+            const eyeYOffset = -bird.radius * 0.3; 
+            ctx.beginPath();
+            ctx.arc(eyeXOffset, eyeYOffset, eyeRadius, 0, Math.PI * 2);
+            ctx.fillStyle = 'white';
+            ctx.fill();
+            ctx.closePath();
+            ctx.beginPath();
+            ctx.arc(eyeXOffset + eyeRadius * 0.3, eyeYOffset, eyeRadius * 0.5, 0, Math.PI * 2); // 瞳孔
+            ctx.fillStyle = 'black';
+            ctx.fill();
+            ctx.closePath();
+            
+            // 绘制鸟喙 (三角形)
+            ctx.beginPath();
+            ctx.moveTo(bird.radius * 0.8, 0); 
+            ctx.lineTo(bird.radius * 1.5, bird.radius * 0.3);
+            ctx.lineTo(bird.radius * 0.8, bird.radius * 0.6);
+            ctx.fillStyle = 'orange';
+            ctx.fill();
+            ctx.closePath();
+            
+            ctx.restore(); // 恢复之前保存的绘图状态
+        }
+        
+        // === JS: 绘制 - 绘制弹弓皮筋 ===
+        // 仅当小鸟在弹弓上且正在被拖拽时绘制
+        function drawSlingshotBands() {
+            if (!bird || !bird.onSlingshot || !isDragging) return;
+
+            ctx.beginPath();
+            ctx.moveTo(leftProngTip.x, leftProngTip.y); // 皮筋起点1 (左叉尖)
+            ctx.lineTo(bird.x, bird.y); // 连接到小鸟中心
+            ctx.lineTo(rightProngTip.x, rightProngTip.y); // 皮筋起点2 (右叉尖)
+            ctx.strokeStyle = '#5C3317'; // 皮筋颜色
+            ctx.lineWidth = Math.max(1, canvasWidth * 0.008); // 皮筋粗细，随画布宽度调整
+            ctx.stroke();
+            ctx.closePath();
+        }
+
+        // === JS: 绘制 - 绘制所有目标 ===
+        function drawTargets() {
+            targets.forEach(target => {
+                if (!target.isHit) { // 只绘制未被击中的目标
+                    ctx.fillStyle = target.color;
+                    ctx.fillRect(target.x, target.y, target.width, target.height);
+                    // 绘制目标边框，增加视觉效果
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(target.x, target.y, target.width, target.height);
+                }
+            });
+        }
+        
+        // === JS: 游戏逻辑 - 更新小鸟状态 (物理模拟、碰撞检测) ===
+        function updateBird() {
+            if (!bird || !bird.isFlying) return; // 如果没有鸟或者鸟不在飞行，则不更新
+
+            // 物理模拟：重力影响
+            bird.velocityY += GRAVITY;
+            bird.x += bird.velocityX;
+            bird.y += bird.velocityY;
+
+            const groundLine = canvasHeight - SLINGSHOT_GROUND_OFFSET; // 地面Y坐标
+
+            // 碰撞检测：画布边界
+            if (bird.x + bird.radius > canvas.width || bird.x - bird.radius < 0) { // 碰到左右边界
+                bird.velocityX *= -0.4; // 速度反向并衰减 (模拟弹性碰撞)
+                bird.x = Math.max(bird.radius, Math.min(canvas.width - bird.radius, bird.x)); // 确保鸟在画布内
+            }
+            if (bird.y + bird.radius > groundLine) { // 碰到地面
+                bird.y = groundLine - bird.radius; // 修正位置到地面上
+                bird.velocityY *= -0.3; // 垂直速度反向并衰减
+                bird.velocityX *= 0.8; // 水平速度也衰减 (模拟摩擦力)
+                // 如果速度足够小，则认为小鸟停止飞行
+                if (Math.abs(bird.velocityY) < 1 && Math.abs(bird.velocityX) < 0.5) {
+                    bird.isFlying = false;
+                    checkRoundOver(); // 检查回合是否结束（例如是否通关）
+                }
+            }
+            if (bird.y - bird.radius < 0) { // 碰到上边界
+                bird.y = bird.radius;
+                bird.velocityY *= -0.5; // 速度反向并衰减
+            }
+
+            // 碰撞检测：小鸟与目标
+            targets.forEach(target => {
+                if (!target.isHit) { // 只检测未被击中的目标
+                    if (checkCollision(bird, target)) {
+                        target.isHit = true; // 标记目标为已击中
+                        score += 10; // 增加得分
+                    }
+                }
+            });
+            updateScore(); // 更新计分板显示
+            
+            // 检查是否达成当前关卡通关条件，并显示提示信息
+            if (checkWinCondition() && !gameWon && currentLevel <= TOTAL_LEVELS && !levelClearMessageShown) {
+                showMessage(`等级 ${currentLevel} 清除！小鸟落地后将进入下一关。`);
+                levelClearMessageShown = true; // 标记消息已显示，防止重复
+            }
+        }
+
+        // === JS: 游戏逻辑 - 碰撞检测 (圆形与矩形) ===
+        function checkCollision(circle, rect) {
+            // 找到矩形上离圆心最近的点
+            let closestX = Math.max(rect.x, Math.min(circle.x, rect.x + rect.width));
+            let closestY = Math.max(rect.y, Math.min(circle.y, rect.y + rect.height));
+            // 计算该点与圆心的距离
+            let distanceX = circle.x - closestX;
+            let distanceY = circle.y - closestY;
+            let distanceSquared = (distanceX * distanceX) + (distanceY * distanceY);
+            // 如果距离的平方小于半径的平方，则发生碰撞
+            return distanceSquared < (circle.radius * circle.radius);
+        }
+
+        // === JS: 游戏主循环 ===
+        // 每一帧都会执行此函数，用于清空画布、绘制所有元素、更新游戏状态
+        function gameLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // 清空画布
+
+            // 绘制地面线
+            const groundLineY = canvasHeight - SLINGSHOT_GROUND_OFFSET;
+            ctx.beginPath();
+            ctx.moveTo(0, groundLineY);
+            ctx.lineTo(canvas.width, groundLineY);
+            ctx.strokeStyle = '#8B4513'; 
+            ctx.lineWidth = 4;
+            ctx.stroke();
+            ctx.closePath();
+
+            // 绘制游戏元素
+            drawSlingshotBands(); // 绘制皮筋 (如果需要)
+            drawTargets(); // 绘制目标
+            drawBird(); // 绘制小鸟
+            
+            updateBird(); // 更新小鸟状态 (物理和碰撞)
+            
+            requestAnimationFrame(gameLoop); // 请求浏览器在下一帧再次调用gameLoop，形成动画循环
+        }
+
+        // === JS: UI - 更新计分板显示 ===
+        function updateScore() {
+            scoreBoard.textContent = `等级: ${currentLevel}/${TOTAL_LEVELS} | 得分: ${score} | 已发射: ${launchCount} (总计: ${totalSessionLaunches})`;
+        }
+        
+        // === JS: 游戏逻辑 - 检查胜利条件 (当前关卡是否所有目标都被击中) ===
+        function checkWinCondition() {
+            if (targets.length === 0 && currentLevel === 1) return false; // 初始关卡如果没有目标，不算胜利
+            return targets.every(target => target.isHit); // 检查是否所有目标都被击中
+        }
+
+        // === JS: 游戏逻辑 - 进入下一关卡或游戏胜利 ===
+        async function advanceLevel() {
+            currentLevel++;
+            if (currentLevel > TOTAL_LEVELS) { // 所有关卡完成
+                gameWon = true;
+                const finalRecord = { // 准备要保存的游戏记录
+                    totalLaunches: totalSessionLaunches,
+                    levelsCompleted: TOTAL_LEVELS,
+                    score: score,
+                };
+                const saved = await saveGameRecord(finalRecord); // 尝试保存记录到Firebase
+                let message = `太棒了！你完成了所有 ${TOTAL_LEVELS} 个等级！最终得分: ${score}。`;
+                if (saved) {
+                    message += " 记录已保存！";
+                } else {
+                    message += " 记录保存失败。";
+                }
+                showMessage(message);
+                bird.isFlying = false; // 停止小鸟，以防万一
+            } else { // 进入下一关
+                showMessage(`恭喜！等级 ${currentLevel -1} 完成！准备进入等级 ${currentLevel}。`);
+                score += 50 * (currentLevel -1) ; // 关卡奖励得分
+                launchCount = 0; // 重置当前关卡发射次数
+                updateGameConstants(); // 更新游戏常量（可能窗口大小已变）
+                bird = createBird(); // 创建新的小鸟
+                initTargets(currentLevel); // 初始化新关卡的目标
+                updateScore(); // 更新计分板
+            }
+        }
+        
+        // === JS: 游戏逻辑 - 检查回合结束条件 ===
+        // 当小鸟停止飞行时调用，判断是否进入下一关或游戏结束
+        function checkRoundOver() {
+            if (gameWon) return true; // 如果游戏已胜利，则不进行后续判断
+
+            if (!bird.isFlying) { // 仅当小鸟停止飞行时检查
+                if (checkWinCondition()) { // 如果满足当前关卡胜利条件
+                    advanceLevel(); // 进入下一关或宣布游戏胜利
+                    return true; 
+                } 
+            }
+            return false;
+        }
+
+        // === JS: 输入处理 - 获取鼠标/触摸在Canvas上的相对位置 ===
+        function getMousePos(evt) {
+            const rect = canvas.getBoundingClientRect(); // 获取Canvas在视窗中的位置和大小
+            // 处理鼠标事件 (evt.clientX/Y) 或触摸事件 (evt.touches[0].clientX/Y)
+            const clientX = evt.clientX || (evt.touches && evt.touches[0].clientX);
+            const clientY = evt.clientY || (evt.touches && evt.touches[0].clientY);
+            return {
+                x: clientX - rect.left, // 减去Canvas的左边距
+                y: clientY - rect.top   // 减去Canvas的上边距
+            };
+        }
+        
+        // === JS: 输入处理 - 开始拖拽小鸟 (鼠标按下/触摸开始) ===
+        function handleDragStart(e) {
+            if (gameWon) return; // 游戏胜利则不处理拖拽
+            if (!bird || bird.isFlying) return; // 小鸟不存在或正在飞行则不处理
+
+            const mousePos = getMousePos(e);
+            // 计算鼠标/触摸点与小鸟中心的距离
+            const distance = Math.sqrt((mousePos.x - bird.x) ** 2 + (mousePos.y - bird.y) ** 2);
+
+            // 如果点击在小鸟附近且小鸟在弹弓上，则开始拖拽
+            if (distance < bird.radius * 1.5 && bird.onSlingshot) { 
+                isDragging = true;
+                if (e.type === 'touchstart') e.preventDefault(); // 阻止触摸事件的默认行为 (如页面滚动)
+            }
+        }
+
+        // === JS: 输入处理 - 拖拽小鸟中 (鼠标移动/触摸移动) ===
+        function handleDragMove(e) {
+            if (!isDragging || !bird || !bird.onSlingshot) return; // 未开始拖拽或小鸟状态不对则不处理
+
+            const mousePos = getMousePos(e);
+            // 计算从弹弓原点到鼠标/触摸点的向量
+            let dx = mousePos.x - SLINGSHOT_X;
+            let dy = mousePos.y - SLINGSHOT_Y; 
+            let dragDistance = Math.sqrt(dx * dx + dy * dy); // 拖拽距离
+
+            // 限制最大拖拽距离
+            if (dragDistance > MAX_DRAG_DISTANCE) {
+                const ratio = MAX_DRAG_DISTANCE / dragDistance;
+                dx *= ratio;
+                dy *= ratio;
+            }
+            
+            // 更新小鸟位置到拖拽点
+            bird.x = SLINGSHOT_X + dx;
+            bird.y = SLINGSHOT_Y + dy;
+            if (e.type === 'touchmove') e.preventDefault(); // 阻止触摸事件的默认行为
+        }
+
+        // === JS: 输入处理 - 结束拖拽小鸟 (鼠标松开/触摸结束) / 发射小鸟 ===
+        function handleDragEnd() {
+            if (!isDragging || !bird || !bird.onSlingshot) return; // 未开始拖拽或小鸟状态不对则不处理
+
+            isDragging = false;
+            bird.isFlying = true; // 标记小鸟为飞行状态
+            bird.onSlingshot = false; // 标记小鸟已离开弹弓
+            launchCount++; // 增加当前关卡发射次数
+            totalSessionLaunches++; // 增加总发射次数
+
+            // 根据拖拽的幅度和方向计算初始发射速度
+            // (SLINGSHOT_X - bird.x) 和 (SLINGSHOT_Y - bird.y) 是拖拽向量的反向
+            // 0.22 是一个力度系数，可以调整发射强度
+            bird.velocityX = (SLINGSHOT_X - bird.x) * 0.22; 
+            bird.velocityY = (SLINGSHOT_Y - bird.y) * 0.22;
+            
+            updateScore(); // 更新计分板
+            levelClearMessageShown = false; // 重置关卡清除消息状态，为下一次发射或碰撞做准备
+        }
+
+        // === JS: 事件监听 - Canvas上的鼠标事件 ===
+        canvas.addEventListener('mousedown', handleDragStart);
+        canvas.addEventListener('mousemove', handleDragMove);
+        canvas.addEventListener('mouseup', handleDragEnd);
+        canvas.addEventListener('mouseleave', handleDragEnd); // 鼠标离开Canvas也视为拖拽结束
+
+        // === JS: 事件监听 - Canvas上的触摸事件 ===
+        // { passive: false } 用于允许在事件处理函数中调用 e.preventDefault()
+        canvas.addEventListener('touchstart', handleDragStart, { passive: false });
+        canvas.addEventListener('touchmove', handleDragMove, { passive: false });
+        canvas.addEventListener('touchend', handleDragEnd);
+        canvas.addEventListener('touchcancel', handleDragEnd); // 触摸取消也视为拖拽结束
+
+
+        // === JS: 事件监听 - "重置小鸟"按钮点击 ===
+        resetButton.addEventListener('click', () => {
+            if (gameWon) { // 如果游戏已通关
+                showMessage("你已赢得所有等级！点击“重置游戏”重新开始。");
+                return;
+            }
+            // 如果当前关卡已完成，且小鸟不在飞行（可能刚落地完成关卡）
+            if (checkWinCondition() && !bird.isFlying) { 
+                 showMessage(`等级 ${currentLevel} 已完成。小鸟已为下一关准备好或游戏已通关。`);
+                 if (currentLevel <= TOTAL_LEVELS) { // 如果还有下一关
+                    updateGameConstants(); 
+                    bird = createBird(); // 重置小鸟到弹弓
+                 }
+                 return;
+            }
+            if (bird && bird.isFlying) { // 如果小鸟正在飞行中
+                showMessage("小鸟还在飞行中！");
+                return;
+            }
+            // 其他情况（例如小鸟发射后落在地上但未完成关卡），重置小鸟
+            updateGameConstants(); 
+            bird = createBird(); 
+            updateScore(); 
+        });
+
+        // === JS: 事件监听 - "重置游戏"按钮点击 ===
+        resetGameButton.addEventListener('click', () => {
+            // 重置所有游戏状态到初始值
+            score = 0;
+            launchCount = 0;
+            totalSessionLaunches = 0; 
+            currentLevel = 1;
+            gameWon = false; 
+            levelClearMessageShown = false;
+            updateGameConstants(); // 更新常量和画布
+            initTargets(currentLevel); // 初始化第一关的目标
+            bird = createBird(); // 创建新的小鸟
+            updateScore(); // 更新计分板显示
+            showMessage("游戏已重置，开始等级 1！");
+        });
+        
+        // === JS: 事件监听 - 浏览器窗口大小改变 ===
+        window.addEventListener('resize', () => {
+            updateGameConstants(); // 重新计算游戏常量和画布尺寸
+            initTargets(currentLevel); // 根据新尺寸重新初始化当前关卡的目标
+            bird = createBird(); // 重置小鸟
+            updateScore(); // 更新计分板
+            showMessage("窗口大小已改变，当前等级已重置布局。");
+        });
+
+        // === JS: 游戏初始化总函数 ===
+        // 页面加载完成后执行此函数，开始整个游戏
+        async function initGame() {
+            createAndPlaceSlingshotSVG(); // 创建并放置弹弓SVG
+            await initFirebase(); // 初始化Firebase服务 (异步)
+            updateGameConstants(); // 设置初始游戏常量和画布尺寸
+
+            // 初始化游戏状态变量
+            currentLevel = 1;
+            gameWon = false;
+            score = 0; 
+            launchCount = 0; 
+            totalSessionLaunches = 0; 
+            levelClearMessageShown = false;
+
+            initTargets(currentLevel); // 初始化第一关的目标
+            bird = createBird(); // 创建小鸟
+            updateScore(); // 更新计分板显示
+            gameLoop(); // 启动游戏主循环
+        }
+
+        // === JS: 启动游戏 ===
+        initGame(); 
+    </script>
+</body>
+</html>
